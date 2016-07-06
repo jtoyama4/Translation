@@ -1,5 +1,5 @@
 # coding:utf-8
-import pickle
+import cPickle
 
 import nltk
 import numpy as np
@@ -114,9 +114,9 @@ class RNNTheano:
             l_emb = lasagne.layers.InputLayer(shape=(self.batch_size, None, self.em_dim), input_var = input_var)
             l_mask = lasagne.layers.InputLayer(shape=(None,None),input_var = self.mask)
             l_forward = lasagne.layers.GRULayer(
-                l_emb, self.hidden_dim,mask_input=l_mask,grad_clip = self.grad_clipping)
+                l_emb, self.hidden_dim,mask_input=l_mask,grad_clipping = self.grad_clipping)
             l_backward = lasagne.layers.GRULayer(
-                l_emb, self.hidden_dim,mask_input=l_mask,backwards=True,grad_clip = self.grad_clipping)
+                l_emb, self.hidden_dim,mask_input=l_mask,backwards=True,grad_clipping = self.grad_clipping)
             l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward],axis = 2)
             h = lasagne.layers.get_output(l_concat)
             h_1 = [lasagne.layers.get_output(l_backward)[i][0] for i in range(self.batch_size)]
@@ -162,6 +162,12 @@ class RNNTheano:
             return v
 
 
+        def calculate_cost(predicted_y, target):
+            p_y_given_x = T.nnet.softmax(predicted_y)
+            index = T.argmax(target,axis = 1)
+            cost = -T.sum(T.log(p_y_given_x)[T.arange(target.shape[0]),index])
+            return cost
+
         emb_x = T.dot(self.x,self.Ein)
         h, h_1, bi_params = bidirectional(emb_x)
         params = self.params + bi_params
@@ -171,9 +177,10 @@ class RNNTheano:
             [y, s], _ = theano.scan(fn=decoder_step,
                                   non_sequences=[self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.U, self.Va,
                                                  self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h[i], self.C, self.Wi, self.Eout],
-                                  outputs_info=[np.ones(shape = (self.out_dim)).astype('float32'), s0], n_steps= self.t[i].shape[0])
+                                  outputs_info=[np.zeros(shape = (self.out_dim)).astype('float32'), s0], n_steps= self.t[i].shape[0])
 
-            cost += T.sum((y - self.t[i]) ** 2)
+            #cost += T.sum((T.nnet.softmax(y) - self.t[i]) ** 2)
+            cost += calculate_cost(y,self.t[i])
 
         gparams = T.grad(cost,params)
         print "nice"
@@ -204,6 +211,9 @@ def make_mask(data,batch_size,max_length,dim):
 
     return mask.astype('float32'),shaped_data
 
+def shuffle_data(data_set):
+    np.random.shuffle(data_set)
+    return data_set
 if __name__ == "__main__":
     ge_tokens = Token()
     en_tokens = Token()
@@ -219,6 +229,7 @@ if __name__ == "__main__":
     en_max_length = max(len(i) for i in en_training_data)
     ge_max_length = max(len(i) for i in ge_training_data)
     batch_size = 29
+    n_epoch = 1000
     print len(en_training_data)
     n_batch =len(en_training_data) / batch_size
     print n_batch
@@ -228,16 +239,25 @@ if __name__ == "__main__":
 
 
     model = rnn_en.model()
-    print "compile success"
 
-    for i in range(n_batch):
-        x_data = ge_training_data[i * batch_size:(i+1) * batch_size]
-        t_data = en_training_data[i * batch_size:(i+1) * batch_size]
-        input_mask,shaped_x_data = make_mask(x_data,batch_size,ge_max_length,in_dim)
-        _,shaped_t_data = make_mask(t_data,batch_size,en_max_length,out_dim)
-        shaped_x_data = shaped_x_data.astype('float32')
-        shaped_t_data = shaped_t_data.astype('float32')
-        train = model(shaped_x_data,shaped_t_data,input_mask)
-        print train
+    print "compile success"
+    for epoch in range(n_epoch):
+        for i in range(n_batch):
+            x_data = ge_training_data[i * batch_size:(i+1) * batch_size]
+            t_data = en_training_data[i * batch_size:(i+1) * batch_size]
+            input_mask,shaped_x_data = make_mask(x_data,batch_size,ge_max_length,in_dim)
+            _,shaped_t_data = make_mask(t_data,batch_size,en_max_length,out_dim)
+            shaped_x_data = shaped_x_data.astype('float32')
+            shaped_t_data = shaped_t_data.astype('float32')
+            cost = model(shaped_x_data,shaped_t_data,input_mask)
+            print cost
+        ge_training_data = shuffle_data(x_data)
+        en_training_data = shuffle_data(t_data)
+
+        f = open("models/model_%s.dump" % epoch)
+        cPickle.dump(rnn_en,f,protocol=cPickle.HIGHEST_PROTOCOL)
+        f.close()
+
+
 
 
