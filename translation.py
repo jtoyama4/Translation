@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5, grad_clipping=100):
+    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500, grad_clipping=100):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
