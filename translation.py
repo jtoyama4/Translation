@@ -10,9 +10,9 @@ import lasagne
 from lasagne.layers import *
 from collections import OrderedDict
 import sys
-sys.setrecursionlimit(10000)
+sys.setrecursionlimit(1000)
 
-theano.config.optimizer = 'fast_compile'
+#theano.config.optimizer = 'fast_compile'
 theano.config.floatX = 'float32'
 
 
@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500, grad_clipping=100):
+    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5, grad_clipping=100):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -57,6 +57,7 @@ class RNNTheano:
         self.v_dim = v_dim
         self.l_dim = l_dim
         self.grad_clipping = grad_clipping
+        self.seq_length_t = seq_length_t
         self.theano = {}
 
         rng = np.random.RandomState(1234)
@@ -82,6 +83,7 @@ class RNNTheano:
         self.U = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
                                name="U")
         self.Wo = theano.shared(np.random.normal(0, 0.01, size=(l_dim, out_dim)).astype("float32"), name="Wo")
+
         self.Uo = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, l_dim * 2)).astype("float32"),
                                 name="Uo")
         self.Co = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim * 2, l_dim * 2)).astype("float32"),
@@ -119,36 +121,40 @@ class RNNTheano:
                 l_emb, self.hidden_dim,mask_input=l_mask,backwards=True,grad_clipping = self.grad_clipping)
             l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward],axis = 2)
             h = lasagne.layers.get_output(l_concat)
-            h_1 = [lasagne.layers.get_output(l_backward)[i][0] for i in range(self.batch_size)]
+            h_1 = lasagne.layers.get_output(l_backward).dimshuffle(1,0,2)[0]
             bi_params = lasagne.layers.get_all_params(l_concat)
             return h,h_1,bi_params
 
 
-        def decoder_step(yprev, sprev, wr, ur, cr, wz, uz, cz, u, va, wa, ua, uo, vo, wo, co, hnow, c_c,wi,eout):
+        def decoder_step(yprev, sprev, wr, ur, cr, wz, uz, cz, u, va, wa, ua, uo, vo, wo, co, hnow, c_c, wi, eout):
             def calculate_e(hh, v, w, uu, s_t):
                 return T.exp(T.dot(v, (T.tanh(T.dot(s_t, w) + T.dot(hh, uu)))))
 
+            def calculate_c(a,hnow):
+                return T.dot(a,hnow)
 
             def maxout(t):
-                return [T.max([t[i * 2], t[i * 2 + 1]]) for i in range(self.l_dim)]
+                #t.reshape(self.l_dim * 2 * self.batch_size,)
+                return T.as_tensor_variable([T.max([t[i * 2], t[i * 2 + 1]]) for i in range(self.l_dim)])
 
-
-            e, _ = theano.scan(fn=calculate_e, non_sequences=[va, wa, ua, sprev], sequences=hnow)
+            e = T.as_tensor_variable([theano.scan(fn=calculate_e, non_sequences=[va, wa, ua, sprev[i]], sequences=[hnow[i]])[0] for i in range(self.batch_size)])
 
             a = e / T.sum(e)
 
-            c = T.dot(a,hnow)
+            #c = [T.dot(a[i],hnow[i]) for i in range(self.batch_size)]
+
+            c,_ = theano.scan(fn = calculate_c, non_sequences = [], sequences = [a,hnow])
 
             t_bar = T.dot(sprev, uo) + T.dot(T.dot(yprev,eout), vo) + T.dot(c, co)
 
-            t_t = maxout(t_bar)
+            t_t,_ = theano.scan(fn = maxout, non_sequences = [],sequences = t_bar)
 
-            yprev = T.dot(t_t,wo)
+            yprev = T.dot(t_t, wo)
 
             ri = T.nnet.sigmoid(T.dot(T.dot(yprev,eout), wr) + T.dot(sprev, ur) + T.dot(c, cr))
             zi = T.nnet.sigmoid(T.dot(T.dot(yprev,eout), wz) + T.dot(sprev, uz) + T.dot(c, cz))
-            si_bar = T.tanh(T.dot(T.dot(yprev,eout),wi) + T.dot(ri * sprev, u) + T.dot(c, c_c))
-            sprev = (1 - zi) * sprev + zi * si_bar
+            si_bar = T.tanh(T.dot(T.dot(yprev,eout),wi) + T.dot((ri * sprev), u) + T.dot(c, c_c))
+            sprev = (T.as_tensor_variable(np.ones(shape = (self.batch_size,1)).astype('float32')) - zi) * sprev + (zi * si_bar)
 
 
             return yprev, sprev
@@ -163,15 +169,16 @@ class RNNTheano:
 
 
         def calculate_cost(predicted_y, target):
-            p_y_given_x = T.nnet.softmax(predicted_y)
-            index = T.argmax(target,axis = 1)
-            cost = -T.sum(T.log(p_y_given_x)[T.arange(target.shape[0]),index])
+            p_y_given_x = T.nnet.softmax(predicted_y.reshape((self.batch_size * self.seq_length_t,self.out_dim)))
+            index = T.argmax(target.reshape((self.batch_size * self.seq_length_t,self.out_dim)),axis = 1)
+            cost = -T.sum(T.log(p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index])
             return cost
 
         emb_x = T.dot(self.x,self.Ein)
         h, h_1, bi_params = bidirectional(emb_x)
+        print type(h_1)
         params = self.params + bi_params
-        cost = 0
+        """
         for i in range(batch_size):
             s0 = T.tanh(T.dot(h_1[i], self.Ws))
             [y, s], _ = theano.scan(fn=decoder_step,
@@ -181,7 +188,13 @@ class RNNTheano:
 
             #cost += T.sum((T.nnet.softmax(y) - self.t[i]) ** 2)
             cost += calculate_cost(y,self.t[i])
-
+        """
+        s0 = T.tanh(T.dot(h_1,self.Ws))
+        [y,s], _ = theano.scan(fn = decoder_step,
+                               non_sequences=[self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.U, self.Va,
+                                                 self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
+                               outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
+        cost = calculate_cost(y,self.t)
         gparams = T.grad(cost,params)
         print "nice"
         updates = OrderedDict()
@@ -194,7 +207,7 @@ class RNNTheano:
 
             updates[p] = p - v
 
-        compute = theano.function(inputs=[self.x, self.t,self.mask], outputs=cost, updates=updates)
+        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=updates)
 
         return compute
 
@@ -235,7 +248,7 @@ if __name__ == "__main__":
     print n_batch
     """RNNTheano takes in_dim and out_dim as input"""
     # rnn_en = RNNTheano(en_tokens.Vocabsize,ge_tokens.Vocabsize)
-    rnn_en = RNNTheano(in_dim, out_dim,batch_size)
+    rnn_en = RNNTheano(in_dim, out_dim,batch_size,en_max_length)
 
 
     model = rnn_en.model()
