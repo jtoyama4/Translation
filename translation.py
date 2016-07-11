@@ -10,7 +10,7 @@ import lasagne
 from lasagne.layers import *
 from collections import OrderedDict
 import sys
-sys.setrecursionlimit(1000)
+sys.setrecursionlimit(100000)
 
 #theano.config.optimizer = 'fast_compile'
 theano.config.floatX = 'float32'
@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500, grad_clipping=100):
+    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -56,7 +56,6 @@ class RNNTheano:
         self.hidden_dim = hidden_dim
         self.v_dim = v_dim
         self.l_dim = l_dim
-        self.grad_clipping = grad_clipping
         self.seq_length_t = seq_length_t
         self.theano = {}
 
@@ -96,19 +95,23 @@ class RNNTheano:
                                 name="Wi")
         self.eps = theano.shared(np.float32(0.000001),
                                 name="eps")
+        self.threshold = theano.shared(np.float32(1.0),name = 'threshold')
         self.ganma = theano.shared(np.float32(0.95),name = "ganma")
         self.s = theano.shared(np.float32(0), name = 's')
         self.Ein = theano.shared(np.random.normal(0, 0.01, size=(in_dim, em_dim)).astype("float32"),
                                 name="Ein")
         self.Eout = theano.shared(np.random.normal(0, 0.01, size=(out_dim, em_dim)).astype("float32"),
-                                name="Eout")
-        self.r = theano.shared(np.float32(0), name = 'r')
+                                name="Eoutioooo")
         self.x = T.tensor3('x')
         self.t = T.tensor3('t')
         self.mask = T.matrix('mask')
         self.lr = theano.shared(np.float32(0.95),name = "lr")
         self.params = [self.Va, self.Wa, self.Ua, self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.C, self.U,
                        self.Wo, self.Uo, self.Co, self.Vo, self.Ws,self.Wi,self.Ein,self.Eout]
+        self.updates = OrderedDict()
+        self.ada_dic = OrderedDict()
+        for i in range(100):
+            self.ada_dic[i] = [0,0]
 
 
     def model(self):
@@ -116,9 +119,9 @@ class RNNTheano:
             l_emb = lasagne.layers.InputLayer(shape=(self.batch_size, None, self.em_dim), input_var = input_var)
             l_mask = lasagne.layers.InputLayer(shape=(None,None),input_var = self.mask)
             l_forward = lasagne.layers.GRULayer(
-                l_emb, self.hidden_dim,mask_input=l_mask,grad_clipping = self.grad_clipping)
+                l_emb, self.hidden_dim,mask_input=l_mask)
             l_backward = lasagne.layers.GRULayer(
-                l_emb, self.hidden_dim,mask_input=l_mask,backwards=True,grad_clipping = self.grad_clipping)
+                l_emb, self.hidden_dim,mask_input=l_mask,backwards=True)
             l_concat = lasagne.layers.ConcatLayer([l_forward, l_backward],axis = 2)
             h = lasagne.layers.get_output(l_concat)
             h_1 = lasagne.layers.get_output(l_backward).dimshuffle(1,0,2)[0]
@@ -161,17 +164,19 @@ class RNNTheano:
 
 
         def adadelta(ada_param,g):
-            ada_param[0] = self.ganma * self.r + (1 - self.ganma) * (g * g)
+            ada_param[0] = self.ganma * ada_param[0] + (1 - self.ganma) * (g * g)
             v = ((T.sqr(ada_param[1]) + self.eps) / (T.sqr(ada_param[0]) + self.eps)) * g
             ada_param[1] = self.ganma * ada_param[1] + (1 - self.ganma) * (v * v)
             #return T.cast(v, dtype = 'float32')
-            return v
+            return v,ada_param
 
 
         def calculate_cost(predicted_y, target):
             p_y_given_x = T.nnet.softmax(predicted_y.reshape((self.batch_size * self.seq_length_t,self.out_dim)))
-            index = T.argmax(target.reshape((self.batch_size * self.seq_length_t,self.out_dim)),axis = 1)
-            cost = -T.sum(T.log(p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index])
+            reshaped_target = target.reshape((self.batch_size * self.seq_length_t,self.out_dim))
+            index = T.argmax((reshaped_target),axis = 1)
+            sw = T.gt(T.sum(reshaped_target,axis = 1),0)
+            cost = -T.sum(T.switch(sw,T.log(p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index],0))
             return cost
 
         emb_x = T.dot(self.x,self.Ein)
@@ -192,24 +197,22 @@ class RNNTheano:
         s0 = T.tanh(T.dot(h_1,self.Ws))
         [y,s], _ = theano.scan(fn = decoder_step,
                                non_sequences=[self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.U, self.Va,
-                                                 self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
+                                self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
         cost = calculate_cost(y,self.t)
         gparams = T.grad(cost,params)
         print "nice"
-        updates = OrderedDict()
-        ada_dic = OrderedDict()
-        for i in range(len(params)):
-            ada_dic[i] = [0,0]
+
 
         for i,p,g in zip(range(len(params)),params,gparams):
-            v = adadelta(ada_dic[i],g)
+            g = T.switch(T.gt(g * g,1),g / T.abs_(g),g)
+            v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
+            self.updates[p] = p - v
 
-            updates[p] = p - v
-
-        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=updates)
+        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates)
 
         return compute
+
 
 def make_mask(data,batch_size,max_length,dim):
     mask = np.zeros(shape = (batch_size,max_length))
@@ -224,9 +227,12 @@ def make_mask(data,batch_size,max_length,dim):
 
     return mask.astype('float32'),shaped_data
 
+
 def shuffle_data(data_set):
     np.random.shuffle(data_set)
     return data_set
+
+
 if __name__ == "__main__":
     ge_tokens = Token()
     en_tokens = Token()
