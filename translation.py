@@ -95,6 +95,7 @@ class RNNTheano:
                                 name="Wi")
         self.eps = theano.shared(np.float32(0.000001),
                                 name="eps")
+
         self.threshold = theano.shared(np.float32(1.0),name = 'threshold')
         self.ganma = theano.shared(np.float32(0.95),name = "ganma")
         self.s = theano.shared(np.float32(0), name = 's')
@@ -109,9 +110,6 @@ class RNNTheano:
         self.params = [self.Va, self.Wa, self.Ua, self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.C, self.U,
                        self.Wo, self.Uo, self.Co, self.Vo, self.Ws,self.Wi,self.Ein,self.Eout]
         self.updates = OrderedDict()
-        self.ada_dic = OrderedDict()
-        for i in range(100):
-            self.ada_dic[i] = [0,0]
 
 
     def model(self):
@@ -204,10 +202,15 @@ class RNNTheano:
         print "nice"
 
 
-        for i,p,g in zip(range(len(params)),params,gparams):
-            g = T.switch(T.gt(g * g,1),g / T.abs_(g),g)
-            v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
-            self.updates[p] = p - v
+
+        gparams = [T.switch(T.gt(g * g,1),g / T.abs_(g),g) for g in gparams]
+        #v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
+        #self.updates[p] = p - 0.0001 * g
+
+        #self.updates = lasagne.updates.adadelta(gparams,params)
+        for p,g in zip(params,gparams):
+            g = T.clip(g,-1,1)
+            self.updates[p] = p - 0.001 * g
 
         compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates)
 
