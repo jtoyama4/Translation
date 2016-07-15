@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500):
+    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -177,6 +177,23 @@ class RNNTheano:
             cost = -T.sum(T.switch(sw,T.log((p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index] + self.epsilon),0))
             return cost
 
+        def lasagne_cost(predicted_y,target):
+            p_y_given_x = T.nnet.softmax(predicted_y.reshape((self.batch_size * self.seq_length_t,self.out_dim)))
+            reshaped_target = target.reshape((self.batch_size * self.seq_length_t,self.out_dim))
+            cost = lasagne.objectives.categorical_crossentropy(p_y_given_x,reshaped_target)
+            return cost
+
+        def detect_nan(i, node, fn):
+            for output in fn.outputs:
+                if (not isinstance(output[0], np.random.RandomState) and
+                    np.isnan(output[0]).any()):
+                    print('*** NaN detected ***')
+                    theano.printing.debugprint(node)
+                    print('Inputs : %s' % [input[0] for input in fn.inputs])
+                    print('Outputs: %s' % [output[0] for output in fn.outputs])
+                    break
+
+
         emb_x = T.dot(self.x,self.Ein)
         h, h_1, bi_params = bidirectional(emb_x)
         print type(h_1)
@@ -197,7 +214,8 @@ class RNNTheano:
                                non_sequences=[self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.U, self.Va,
                                 self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
-        cost = calculate_cost(y,self.t)
+        #cost = calculate_cost(y,self.t)
+        cost = lasagne_cost(y.self,self.t)
         gparams = T.grad(cost,params)
 
 
@@ -211,7 +229,7 @@ class RNNTheano:
         """for p,g in zip(params,gparams):
             self.updates[p] = p - 0.001 * g
         """
-        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates)
+        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates,mode=theano.compile.MonitorMode(post_func = detect_nan))
 
         return compute
 
@@ -235,20 +253,29 @@ def shuffle_data(data_set):
     return data_set
 
 
+# This is the current suggested detect_nan implementation to
+# show you how it work.  That way, you can modify it for your
+# need.  If you want exactly this method, you can use
+# ``theano.compile.monitormode.detect_nan`` that will always
+# contain the current suggested version.
+
+
+
+
 if __name__ == "__main__":
     ge_tokens = Token()
     en_tokens = Token()
-    en_tokens.tokenize("training/train.en")
     ge_tokens.tokenize("training/train.de")
+    en_tokens.tokenize("training/train.en")
     in_dim = ge_tokens.Vocabsize
     out_dim = en_tokens.Vocabsize
     print in_dim
     print out_dim
 
-    en_training_data = en_tokens.getTrainingData()[:29000]
     ge_training_data = ge_tokens.getTrainingData()[:29000]
-    en_max_length = max(len(i) for i in en_training_data)
+    en_training_data = en_tokens.getTrainingData()[:29000]
     ge_max_length = max(len(i) for i in ge_training_data)
+    en_max_length = max(len(i) for i in en_training_data)
     batch_size = 29
     n_epoch = 1000
     print len(en_training_data)
@@ -256,7 +283,7 @@ if __name__ == "__main__":
     print n_batch
     """RNNTheano takes in_dim and out_dim as input"""
     # rnn_en = RNNTheano(en_tokens.Vocabsize,ge_tokens.Vocabsize)
-    rnn_en = RNNTheano(in_dim, out_dim,batch_size,en_max_length)
+    rnn_en = RNNTheano(in_dim = in_dim, out_dim = out_dim,batch_size = batch_size,seq_length_t = en_max_length)
 
 
     model = rnn_en.model()
