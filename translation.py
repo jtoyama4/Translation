@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
+    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -95,14 +95,14 @@ class RNNTheano:
                                 name="Wi")
         self.eps = theano.shared(np.float32(0.000001),
                                 name="eps")
-
+        self.epsilon = theano.shared(np.finfo(np.float32).eps)
         self.threshold = theano.shared(np.float32(1.0),name = 'threshold')
         self.ganma = theano.shared(np.float32(0.95),name = "ganma")
         self.s = theano.shared(np.float32(0), name = 's')
         self.Ein = theano.shared(np.random.normal(0, 0.01, size=(in_dim, em_dim)).astype("float32"),
                                 name="Ein")
         self.Eout = theano.shared(np.random.normal(0, 0.01, size=(out_dim, em_dim)).astype("float32"),
-                                name="Eoutioooo")
+                                name="Eout")
         self.x = T.tensor3('x')
         self.t = T.tensor3('t')
         self.mask = T.matrix('mask')
@@ -174,7 +174,7 @@ class RNNTheano:
             reshaped_target = target.reshape((self.batch_size * self.seq_length_t,self.out_dim))
             index = T.argmax((reshaped_target),axis = 1)
             sw = T.gt(T.sum(reshaped_target,axis = 1),0)
-            cost = -T.sum(T.switch(sw,T.log(p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index],0))
+            cost = -T.sum(T.switch(sw,T.log((p_y_given_x)[T.arange(self.batch_size * self.seq_length_t),index] + self.epsilon),0))
             return cost
 
         emb_x = T.dot(self.x,self.Ein)
@@ -199,19 +199,18 @@ class RNNTheano:
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
         cost = calculate_cost(y,self.t)
         gparams = T.grad(cost,params)
-        print "nice"
 
 
 
-        gparams = [T.switch(T.gt(g * g,1),g / T.abs_(g),g) for g in gparams]
+        #gparams = [T.switch(T.gt(g * g,1),g / T.abs_(g),g) for g in gparams]
+        gparams = [T.clip(g,-1,1) for g in gparams]
         #v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
         #self.updates[p] = p - 0.0001 * g
 
-        #self.updates = lasagne.updates.adadelta(gparams,params)
-        for p,g in zip(params,gparams):
-            g = T.clip(g,-1,1)
+        self.updates = lasagne.updates.adadelta(gparams,params)
+        """for p,g in zip(params,gparams):
             self.updates[p] = p - 0.001 * g
-
+        """
         compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates)
 
         return compute
