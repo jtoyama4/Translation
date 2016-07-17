@@ -12,7 +12,7 @@ from collections import OrderedDict
 import sys
 sys.setrecursionlimit(100000)
 
-#theano.config.optimizer = 'fast_compile'
+theano.config.optimizer = 'fast_compile'
 theano.config.floatX = 'float32'
 
 
@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
+    def __init__(self, in_dim, out_dim, batch_size,seq_length_x, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -57,6 +57,7 @@ class RNNTheano:
         self.v_dim = v_dim
         self.l_dim = l_dim
         self.seq_length_t = seq_length_t
+        self.seq_length_x = seq_length_x
         self.theano = {}
 
         rng = np.random.RandomState(1234)
@@ -128,19 +129,21 @@ class RNNTheano:
 
 
         def decoder_step(yprev, sprev, wr, ur, cr, wz, uz, cz, u, va, wa, ua, uo, vo, wo, co, hnow, c_c, wi, eout):
-            def calculate_e(hh, v, w, uu, s_t):
-                return T.exp(T.dot(v, (T.tanh(T.dot(s_t, w) + T.dot(hh, uu)))))
+            def calculate_e(hh, s_t, v, w, uu):
+                return T.as_tensor_variable([T.dot(v, (T.tanh(T.dot(s_t, w) + T.dot(hh[i], uu)))) for i in range(self.seq_length_x)])
 
             def calculate_c(a,hnow):
-                return T.dot(a,hnow)
+                c = T.as_tensor_variable([a[i] * hnow[i] for i in range(self.seq_length_x)])
+                return T.sum(c,axis = 0)
 
             def maxout(t):
                 #t.reshape(self.l_dim * 2 * self.batch_size,)
                 return T.as_tensor_variable([T.max([t[i * 2], t[i * 2 + 1]]) for i in range(self.l_dim)])
 
-            e = T.as_tensor_variable([theano.scan(fn=calculate_e, non_sequences=[va, wa, ua, sprev[i]], sequences=[hnow[i]])[0] for i in range(self.batch_size)])
+            e,_ = theano.scan(fn=calculate_e, non_sequences=[self.Va, self.Wa, self.Ua],sequences = [hnow,sprev])
+            e_total = T.sum(e,axis = 1)
 
-            a = e / T.sum(e)
+            a = T.as_tensor_variable([T.exp(e[i]) / T.exp(e_total[i]) for i in range(self.batch_size)])
 
             #c = [T.dot(a[i],hnow[i]) for i in range(self.batch_size)]
 
@@ -155,7 +158,8 @@ class RNNTheano:
             ri = T.nnet.sigmoid(T.dot(T.dot(yprev,eout), wr) + T.dot(sprev, ur) + T.dot(c, cr))
             zi = T.nnet.sigmoid(T.dot(T.dot(yprev,eout), wz) + T.dot(sprev, uz) + T.dot(c, cz))
             si_bar = T.tanh(T.dot(T.dot(yprev,eout),wi) + T.dot((ri * sprev), u) + T.dot(c, c_c))
-            sprev = (T.as_tensor_variable(np.ones(shape = (self.batch_size,1)).astype('float32')) - zi) * sprev + (zi * si_bar)
+            #sprev = (T.as_tensor_variable(np.ones(shape = (self.batch_size,1)).astype('float32')) - zi) * sprev + (zi * si_bar)
+            sprev = (1-zi) * sprev + (zi * si_bar)
 
 
             return yprev, sprev
@@ -180,7 +184,7 @@ class RNNTheano:
         def lasagne_cost(predicted_y,target):
             p_y_given_x = T.nnet.softmax(predicted_y.reshape((self.batch_size * self.seq_length_t,self.out_dim)))
             reshaped_target = target.reshape((self.batch_size * self.seq_length_t,self.out_dim))
-            cost = lasagne.objectives.categorical_crossentropy(p_y_given_x,reshaped_target)
+            cost = T.sum(lasagne.objectives.categorical_crossentropy(p_y_given_x,reshaped_target))
             return cost
 
         def detect_nan(i, node, fn):
@@ -188,9 +192,11 @@ class RNNTheano:
                 if (not isinstance(output[0], np.random.RandomState) and
                     np.isnan(output[0]).any()):
                     print('*** NaN detected ***')
-                    theano.printing.debugprint(node)
+                    print node
+                    #theano.printing.debugprint(node)
                     print('Inputs : %s' % [input[0] for input in fn.inputs])
                     print('Outputs: %s' % [output[0] for output in fn.outputs])
+                    sys.exit()
                     break
 
 
@@ -215,7 +221,7 @@ class RNNTheano:
                                 self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
         #cost = calculate_cost(y,self.t)
-        cost = lasagne_cost(y.self,self.t)
+        cost = lasagne_cost(y,self.t)
         gparams = T.grad(cost,params)
 
 
@@ -229,7 +235,7 @@ class RNNTheano:
         """for p,g in zip(params,gparams):
             self.updates[p] = p - 0.001 * g
         """
-        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates,mode=theano.compile.MonitorMode(post_func = detect_nan))
+        compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates,on_unused_input='ignore')
 
         return compute
 
@@ -283,7 +289,7 @@ if __name__ == "__main__":
     print n_batch
     """RNNTheano takes in_dim and out_dim as input"""
     # rnn_en = RNNTheano(en_tokens.Vocabsize,ge_tokens.Vocabsize)
-    rnn_en = RNNTheano(in_dim = in_dim, out_dim = out_dim,batch_size = batch_size,seq_length_t = en_max_length)
+    rnn_en = RNNTheano(in_dim = in_dim, out_dim = out_dim,batch_size = batch_size,seq_length_x = ge_max_length,seq_length_t = en_max_length)
 
 
     model = rnn_en.model()
