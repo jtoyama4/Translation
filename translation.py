@@ -94,6 +94,33 @@ class RNNTheano:
                                 name="Ws")
         self.Wi = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
                                 name="Wi")
+
+        self.Wrf = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wrf")
+        self.Urf = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Urf")
+        self.Wzf = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wzf")
+        self.Uzf = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Uzf")
+        self.Wf = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wf")
+        self.Uf = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Uf")
+
+        self.Wrb = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wrb")
+        self.Urb = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Urb")
+        self.Wzb = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wzb")
+        self.Uzb = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Uzb")
+        self.Wb = theano.shared(np.random.normal(0, 0.01, size=(em_dim, hidden_dim)).astype("float32"),
+                                name="Wb")
+        self.Ub = theano.shared(np.random.normal(0, 0.01, size=(hidden_dim, hidden_dim)).astype("float32"),
+                                name="Ub")
+
         self.eps = theano.shared(np.float32(0.000001),
                                 name="eps")
         self.epsilon = theano.shared(np.finfo(np.float32).eps)
@@ -109,13 +136,13 @@ class RNNTheano:
         self.mask = T.matrix('mask')
         self.lr = theano.shared(np.float32(0.95),name = "lr")
         self.params = [self.Va, self.Wa, self.Ua, self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.C, self.U,
-                       self.Wo, self.Uo, self.Co, self.Vo, self.Ws,self.Wi,self.Ein,self.Eout]
+                       self.Wo, self.Uo, self.Co, self.Vo, self.Ws,self.Wi,self.Ein,self.Eout,self.Wrf,self.Urf,self.Wzf,self.Uzf,self.Wf,self.Uf,self.Wrb,self.Urb,self.Wzb,self.Uzb,self.Wb,self.Ub]
         self.updates = OrderedDict()
 
 
     def model(self):
         def bidirectional(input_var):
-            l_emb = lasagne.layers.InputLayer(shape=(self.batch_size, None, self.em_dim), input_var = input_var)
+            l_emb = lasagne.layers.InputLayer(shape=(self.batch_size, self.seq_length_x, self.em_dim), input_var = input_var)
             l_mask = lasagne.layers.InputLayer(shape=(None,None),input_var = self.mask)
             l_forward = lasagne.layers.GRULayer(
                 l_emb, self.hidden_dim,mask_input=l_mask)
@@ -126,6 +153,22 @@ class RNNTheano:
             h_1 = lasagne.layers.get_output(l_backward).dimshuffle(1,0,2)[0]
             bi_params = lasagne.layers.get_all_params(l_concat)
             return h,h_1,bi_params
+
+        def forward_hidden(x,mask,hprev,ein,wrf,urf,wzf,uzf,wf,uf):
+            rif = T.nnet.sigmoid(T.dot(T.dot(x,ein),wrf) + T.dot(hprev,urf))
+            zif = T.nnet.sigmoid(T.dot(T.dot(x,ein),wzf) + T.dot(hprev,uzf))
+            hif_bar = T.tanh(T.dot(T.dot(x,ein),wf) + T.dot((hprev * rif), uf))
+            hif = (1 - zif) * hprev + zif * hif_bar
+
+            return hif * mask
+
+        def backward_hidden(x,hprev,ein,wrb,urb,wzb,uzb,wb,ub):
+            rib = T.nnet.sigmoid(T.dot(T.dot(x,ein),wrb) + T.dot(hprev,urb))
+            zib = T.nnet.sigmoid(T.dot(T.dot(x,ein),wzb) + T.dot(hprev,uzb))
+            hib_bar = T.tanh(T.dot(T.dot(x,ein),wb) + T.dot((rib * hprev), ub))
+            hib = (1 - zib) * hprev + zib * hib_bar
+
+            return hib
 
 
         def decoder_step(yprev, sprev, wr, ur, cr, wz, uz, cz, u, va, wa, ua, uo, vo, wo, co, hnow, c_c, wi, eout):
@@ -140,7 +183,7 @@ class RNNTheano:
                 #t.reshape(self.l_dim * 2 * self.batch_size,)
                 return T.as_tensor_variable([T.max([t[i * 2], t[i * 2 + 1]]) for i in range(self.l_dim)])
 
-            e,_ = theano.scan(fn=calculate_e, non_sequences=[self.Va, self.Wa, self.Ua],sequences = [hnow,sprev])
+            e,_ = theano.scan(fn=calculate_e, non_sequences=[va, wa, ua],sequences = [hnow,sprev])
 
             e = T.exp(e)
 
@@ -203,10 +246,16 @@ class RNNTheano:
                     break
 
 
-        emb_x = T.dot(self.x,self.Ein)
-        h, h_1, bi_params = bidirectional(emb_x)
-        print type(h_1)
-        params = self.params + bi_params
+        #emb_x = T.dot(self.x,self.Ein)
+        #h, h_1, bi_params = bidirectional(emb_x)
+        h_f = T.as_tensor_variable([theano.scan(fn = forward_hidden, sequences = [self.x[i],self.mask[i]], non_sequences=[self.Ein,self.Wrf,self.Urf,self.Wzf,self.Uzf,self.Wf,self.Uf],outputs_info=np.zeros(self.hidden_dim).astype('float32'))[0] for i in range(self.batch_size)])
+        back_x = self.x[:,::-1]
+        h_b = T.as_tensor_variable([theano.scan(fn = backward_hidden, sequences = back_x[i], non_sequences=[self.Ein,self.Wrb,self.Urb,self.Wzb,self.Uzb,self.Wb,self.Ub],outputs_info=np.zeros(self.hidden_dim).astype('float32'))[0] for i in range(self.batch_size)])
+        h_b = h_b[:,::-1]
+
+        h = T.concatenate([h_f,h_b],axis = 2)
+        h_1 = T.as_tensor_variable([h_b[i][0] for i in range(self.batch_size)])
+        #params = self.params + bi_params
         """
         for i in range(batch_size):
             s0 = T.tanh(T.dot(h_1[i], self.Ws))
@@ -225,7 +274,7 @@ class RNNTheano:
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
         #cost = calculate_cost(y,self.t)
         cost = lasagne_cost(y,self.t)
-        gparams = T.grad(cost,params)
+        gparams = T.grad(cost,self.params)
 
 
 
@@ -234,10 +283,11 @@ class RNNTheano:
         #v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
         #self.updates[p] = p - 0.0001 * g
 
-        self.updates = lasagne.updates.adadelta(gparams,params)
+        self.updates = lasagne.updates.adadelta(gparams,self.params)
         """for p,g in zip(params,gparams):
             self.updates[p] = p - 0.001 * g
         """
+
         compute = theano.function(inputs=[self.x, self.t, self.mask], outputs=cost, updates=self.updates,on_unused_input='ignore')
 
         return compute
