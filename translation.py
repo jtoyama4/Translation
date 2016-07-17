@@ -141,9 +141,12 @@ class RNNTheano:
                 return T.as_tensor_variable([T.max([t[i * 2], t[i * 2 + 1]]) for i in range(self.l_dim)])
 
             e,_ = theano.scan(fn=calculate_e, non_sequences=[self.Va, self.Wa, self.Ua],sequences = [hnow,sprev])
+
+            e = T.exp(e)
+
             e_total = T.sum(e,axis = 1)
 
-            a = T.as_tensor_variable([T.exp(e[i]) / T.exp(e_total[i]) for i in range(self.batch_size)])
+            a = T.as_tensor_variable([e[i] / e_total[i] for i in range(self.batch_size)])
 
             #c = [T.dot(a[i],hnow[i]) for i in range(self.batch_size)]
 
