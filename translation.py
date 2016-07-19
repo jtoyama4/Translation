@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size,seq_length_x, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500):
+    def __init__(self, in_dim, out_dim, batch_size,seq_length_x, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -218,6 +218,11 @@ class RNNTheano:
             #return T.cast(v, dtype = 'float32')
             return v,ada_param
 
+        def grad_clipping(gparams):
+            for i,g in enumerate(gparams):
+                l2 = lasagne.regularization.l2(g)
+                gparams[i] = T.switch(T.gt(l2,1),g / l2, g)
+            return gparams
 
         def calculate_cost(predicted_y, target):
             p_y_given_x = T.nnet.softmax(predicted_y.reshape((self.batch_size * self.seq_length_t,self.out_dim)))
@@ -272,14 +277,14 @@ class RNNTheano:
                                non_sequences=[self.Wr, self.Ur, self.Cr, self.Wz, self.Uz, self.Cz, self.U, self.Va,
                                 self.Wa, self.Ua, self.Uo, self.Vo, self.Wo, self.Co, h, self.C, self.Wi, self.Eout],
                                outputs_info=[np.zeros(shape = (self.batch_size,self.out_dim)).astype('float32'), s0], n_steps = self.seq_length_t)
-        #cost = calculate_cost(y,self.t)
-        cost = lasagne_cost(y,self.t)
+        cost = calculate_cost(y,self.t)
+        #cost = lasagne_cost(y,self.t)
         gparams = T.grad(cost,self.params)
 
 
 
         #gparams = [T.switch(T.gt(g * g,1),g / T.abs_(g),g) for g in gparams]
-        gparams = [T.clip(g,-1,1) for g in gparams]
+        gparams = grad_clipping(gparams)
         #v,self.ada_dic[i] = adadelta(self.ada_dic[i],g)
         #self.updates[p] = p - 0.0001 * g
 
