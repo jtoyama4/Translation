@@ -48,7 +48,7 @@ class Token:
 
 
 class RNNTheano:
-    def __init__(self, in_dim, out_dim, batch_size,seq_length_x, seq_length_t,em_dim = 62, hidden_dim=10, v_dim=10, l_dim=5):
+    def __init__(self, in_dim, out_dim, batch_size,seq_length_x, seq_length_t,em_dim = 620, hidden_dim=1000, v_dim=1000, l_dim=500):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.batch_size = batch_size
@@ -340,7 +340,7 @@ if __name__ == "__main__":
     en_training_data = en_tokens.getTrainingData()[:29000]
     ge_max_length = max(len(i) for i in ge_training_data)
     en_max_length = max(len(i) for i in en_training_data)
-    batch_size = 29
+    batch_size = 5
     n_epoch = 1000
     print len(en_training_data)
     n_batch =len(en_training_data) / batch_size
@@ -355,18 +355,20 @@ if __name__ == "__main__":
     print "compile success"
     for epoch in range(n_epoch):
         for i in range(n_batch):
+            print "getting data"
             x_data = ge_training_data[i * batch_size:(i+1) * batch_size]
             t_data = en_training_data[i * batch_size:(i+1) * batch_size]
             input_mask,shaped_x_data = make_mask(x_data,batch_size,ge_max_length,in_dim)
             _,shaped_t_data = make_mask(t_data,batch_size,en_max_length,out_dim)
             shaped_x_data = shaped_x_data.astype('float32')
             shaped_t_data = shaped_t_data.astype('float32')
+            print "calculating cost"
             cost = model(shaped_x_data,shaped_t_data,input_mask)
             print cost
         ge_training_data = shuffle_data(x_data)
         en_training_data = shuffle_data(t_data)
 
-        f = open("models/model_%s.dump" % epoch)
+        f = open("models/model_%s.dump" % epoch,"w")
         cPickle.dump(rnn_en,f,protocol=cPickle.HIGHEST_PROTOCOL)
         f.close()
 
